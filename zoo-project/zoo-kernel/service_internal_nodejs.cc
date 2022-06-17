@@ -86,9 +86,7 @@ static int JSLoadScripts() {
     if (loadenv_ret.IsEmpty()) // There has been a JS exception.
       return 2;
 
-    env->
-
-        exit_code = node::SpinEventLoop(env).FromMaybe(1);
+    exit_code = node::SpinEventLoop(env).FromMaybe(1);
     node::Stop(env);
   }
 
