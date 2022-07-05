@@ -25,72 +25,50 @@
 #define NAPI_DISABLE_CPP_EXCEPTIONS
 //#define NODE_ADDON_API_ENABLE_MAYBE
 #define NODEJS_DEBUG
+#define NAPI_EXPERIMENTAL
 
 #include "service_internal_nodejs.h"
 #include "response_print.h"
+#include <js_native_api.h>
 
-#include <napi.h>
-#include <node.h>
-#include <node_api.h>
-#include <uv.h>
-
-static int RunNodeInstance(node::MultiIsolatePlatform *platform, const std::vector<std::string> &args,
-                           const std::vector<std::string> &exec_args);
-
-static std::vector<std::string> args = {"zoo_loader"};
-static std::vector<std::string> exec_args = {};
-static std::unique_ptr<node::MultiIsolatePlatform> platform = nullptr;
+napi_platform platform = nullptr;
 
 static const char *testScript =
     "function hello_nodejs() { outputs['result']['value']='Hello '+inputs['S']['value']+' from the JS World !'; }";
 
 static int NodeJSInit() {
-  std::vector<std::string> errors;
-  int exit_code = node::InitializeNodeWithArgs(&args, &exec_args, &errors);
-  for (const std::string &error : errors)
-    fprintf(stderr, "%s\n", error.c_str());
-  if (exit_code != 0) {
-    return exit_code;
+#ifdef NODEJS_DEBUG
+  fprintf(stderr, "libnode init\n");
+#endif
+  if (napi_create_platform(0, NULL, 0, NULL, NULL, 0, &platform) != napi_ok) {
+    fprintf(stderr, "Failed creating the platform\n");
+    return -1;
   }
-
-  platform = node::MultiIsolatePlatform::Create(4);
-  v8::V8::InitializePlatform(platform.get());
-  v8::V8::Initialize();
 
   return 0;
 }
 
 static int JSLoadScripts() {
-  int exit_code = 0;
+#ifdef NODEJS_DEBUG
+  fprintf(stderr, "libnode create environment\n");
+#endif
+  napi_env env;
 
-  std::vector<std::string> errors;
-  std::unique_ptr<node::CommonEnvironmentSetup> setup =
-      node::CommonEnvironmentSetup::Create(platform.get(), &errors, args, exec_args);
-  if (!setup) {
-    for (const std::string &err : errors)
-      fprintf(stderr, "%s: %s\n", args[0].c_str(), err.c_str());
-    return 1;
+  if (napi_create_environment(platform, NULL, testScript, &env) != napi_ok) {
+    fprintf(stderr, "Failed running JS\n");
+    return -1;
   }
 
-  v8::Isolate *isolate = setup->isolate();
-  node::Environment *env = setup->env();
-
-  {
-    v8::Locker locker(isolate);
-    v8::Isolate::Scope isolate_scope(isolate);
-    v8::HandleScope handle_scope(isolate);
-    v8::Context::Scope context_scope(setup->context());
-
-    v8::MaybeLocal<v8::Value> loadenv_ret = node::LoadEnvironment(env, testScript);
-
-    if (loadenv_ret.IsEmpty()) // There has been a JS exception.
-      return 2;
-
-    exit_code = node::SpinEventLoop(env).FromMaybe(1);
-    node::Stop(env);
+  if (napi_run_environment(env) != napi_ok) {
+    fprintf(stderr, "Failed flushing pending JS callbacks\n");
+    return -1;
   }
 
-  return exit_code;
+  if (napi_destroy_environment(env, NULL) != napi_ok) {
+    return -1;
+  }
+
+  return 0;
 }
 
 /**
